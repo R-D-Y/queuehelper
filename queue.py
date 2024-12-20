@@ -2,6 +2,7 @@ import subprocess
 import json
 import sys
 import requests
+from typing import Dict, List  # Import for typing
 
 def run_command(cmd: List[str]) -> str:
     """Execute a shell command and return output, handling both success and errors."""
