@@ -5,11 +5,10 @@ import os
 from typing import Dict, List, Set, Tuple
 import requests
 
-
 def check_cf_auth() -> bool:
     """Check if user is authenticated with CF CLI"""
     try:
-        result = subprocess.run(['cf', 'target'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        result = subprocess.run(['cf', 'target'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         
         if result.returncode != 0:
             print("Error: Not authenticated with CF CLI. Please run 'cf login' first.")
@@ -25,16 +24,14 @@ def check_cf_auth() -> bool:
         print("Error: CF CLI not found. Please install it first.")
         return False
 
-
 def run_command(cmd: List[str]) -> str:
     """Execute a shell command and return output"""
     try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, check=True)
         return result.stdout
     except subprocess.CalledProcessError as e:
         print(f"Error executing command {' '.join(cmd)}: {e}")
         sys.exit(1)
-
 
 def get_service_instances() -> List[Dict]:
     """Get all RabbitMQ service instances across foundation"""
@@ -90,7 +87,6 @@ def get_service_instances() -> List[Dict]:
         
     return instances
 
-
 def get_instance_credentials(instance_guid: str, org_name: str, space_name: str) -> Dict:
     """Get RabbitMQ credentials from service key"""
     try:
@@ -130,7 +126,6 @@ def get_instance_credentials(instance_guid: str, org_name: str, space_name: str)
         print(f"Error getting instance credentials: {e}")
         return {}
 
-
 def check_queue_mirroring(api_uri: str, vhost: str, username: str, password: str) -> List[Dict]:
     """Check for mirrored queues using RabbitMQ HTTP API"""
     try:
@@ -163,7 +158,6 @@ def check_queue_mirroring(api_uri: str, vhost: str, username: str, password: str
     except requests.exceptions.RequestException as e:
         print(f"Error checking queue mirroring: {e}")
         return []
-
 
 def main():
     if not check_cf_auth():
@@ -214,7 +208,6 @@ def main():
                 print(f"    Mirrors: {queue['mirrors']} ({queue['synchronized_mirrors']} synchronized)")
     else:
         print("\nNo instances found using classic queue mirroring")
-
 
 if __name__ == '__main__':
     main()
