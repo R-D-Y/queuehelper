@@ -1,8 +1,8 @@
 import subprocess
 import json
 import sys
-import requests
 from typing import Dict, List, Tuple
+import requests
 
 def run_command(cmd: List[str]) -> str:
     """Execute a shell command and return output, handling errors and successes."""
@@ -70,7 +70,7 @@ def check_queue_mirroring(credentials: Dict) -> List[Dict]:
     password = credentials.get('password')
     vhost = credentials.get('vhost')
     try:
-        encoded_vhost = requests.utils.quote(vhost, safe='')
+        encoded_vhost = requests.utils.quote(vhost.encode('utf-8') if isinstance(vhost, str) else vhost, safe='')
         response = requests.get(f"{api_uri}/api/queues/{encoded_vhost}", auth=(username, password), verify=True)
         if response.status_code == 200:
             queues = response.json()
