@@ -1,17 +1,18 @@
 #!/bin/bash
 
-# Définition du seuil (90%)
-THRESHOLD=90
-
 # Fichiers de sortie
-PLAN_LIMITE_FILE="plan-pres-limite.txt"
+ALL_BDS_FILE="toutes-les-bds.txt"
 ALLOCATED_TROP_FILE="alocated-trop-grand.txt"
 
 # Nettoyage des fichiers avant d'ajouter du contenu
-> "$PLAN_LIMITE_FILE"
+> "$ALL_BDS_FILE"
 > "$ALLOCATED_TROP_FILE"
 
 echo "Début du script de vérification des bases de données..."
+
+# En-têtes des fichiers de sortie
+echo "Abonnement | Groupe de Ressources | Serveur | BD | Plan | Taille Plan (Go) | Utilisé (Go) | % Utilisation" > "$ALL_BDS_FILE"
+echo "Abonnement | Groupe de Ressources | Serveur | BD | Plan | Taille Plan (Go) | Utilisé (Go) | % Utilisation | % Excès" > "$ALLOCATED_TROP_FILE"
 
 # Lire chaque abonnement depuis sub.txt
 while read -r subscription; do
@@ -29,35 +30,39 @@ while read -r subscription; do
         echo "  -> Traitement du serveur: $serverName (Groupe de ressources: $resourceGroup)"
 
         # Récupérer toutes les bases de données du serveur
-        databases=$(az sql db list --server "$serverName" --resource-group "$resourceGroup" --query "[].{name:name, maxSize:maxSizeBytes, allocatedSize:status.storageUsedInBytes}" --output json)
+        databases=$(az sql db list --server "$serverName" --resource-group "$resourceGroup" --query "[].{name:name, sku:sku.tier, maxSize:maxSizeBytes, allocatedSize:status.storageUsedInBytes}" --output json)
 
         # Vérifier chaque base de données
         echo "$databases" | jq -c '.[]' | while read db; do
             dbName=$(echo "$db" | jq -r '.name')
+            sku=$(echo "$db" | jq -r '.sku')
             maxSize=$(echo "$db" | jq -r '.maxSize')
             allocatedSize=$(echo "$db" | jq -r '.allocatedSize')
 
             # Vérification si les valeurs existent
-            if [[ "$maxSize" == "null" || "$allocatedSize" == "null" ]]; then
+            if [[ "$maxSize" == "null" || "$allocatedSize" == "null" || "$maxSize" -eq 0 ]]; then
                 continue
             fi
 
-            # Calcul du pourcentage d'utilisation
+            # Conversion en Go
+            maxSizeGB=$((maxSize / 1024 / 1024 / 1024))
+            allocatedSizeGB=$((allocatedSize / 1024 / 1024 / 1024))
+
+            # Calcul du pourcentage d'utilisation du plan
             usagePercentage=$(( (allocatedSize * 100) / maxSize ))
 
-            # Vérifier si la BD est proche de la limite
-            if [[ $usagePercentage -ge $THRESHOLD ]]; then
-                echo "$subscription | $resourceGroup | $serverName | $dbName | Utilisation: $usagePercentage% | Plan: $(($maxSize / 1024 / 1024 / 1024)) Go | Utilisé: $(($allocatedSize / 1024 / 1024 / 1024)) Go" >> "$PLAN_LIMITE_FILE"
-            fi
+            # Écriture dans le fichier de toutes les BD
+            echo "$subscription | $resourceGroup | $serverName | $dbName | $sku | $maxSizeGB Go | $allocatedSizeGB Go | $usagePercentage%" >> "$ALL_BDS_FILE"
 
             # Vérifier si la BD dépasse son plan
             if [[ $allocatedSize -gt $maxSize ]]; then
-                echo "$subscription | $resourceGroup | $serverName | $dbName | Plan: $(($maxSize / 1024 / 1024 / 1024)) Go | Utilisé: $(($allocatedSize / 1024 / 1024 / 1024)) Go" >> "$ALLOCATED_TROP_FILE"
+                excessPercentage=$(( (allocatedSize * 100) / maxSize - 100 ))
+                echo "$subscription | $resourceGroup | $serverName | $dbName | $sku | $maxSizeGB Go | $allocatedSizeGB Go | $usagePercentage% | $excessPercentage%" >> "$ALLOCATED_TROP_FILE"
             fi
         done
     done
 done < sub.txt
 
 echo "Script terminé. Résultats enregistrés dans :"
-echo "- $PLAN_LIMITE_FILE (bases proches de la limite)"
+echo "- $ALL_BDS_FILE (toutes les bases de données)"
 echo "- $ALLOCATED_TROP_FILE (bases dépassant leur plan)"
