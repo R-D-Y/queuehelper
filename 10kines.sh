@@ -29,12 +29,8 @@ while read -r subscription; do
 
         echo "  📌 Traitement du serveur: $serverName (Groupe de ressources: $resourceGroup)"
 
-        # Récupérer toutes les bases de données du serveur (limité aux 10 premières)
-        databases=$(az sql db list --server "$serverName" --resource-group "$resourceGroup" --output json | jq '[.[]] | .[:10]')
-
-        # Debug: afficher les bases récupérées
-        echo "    📄 Bases trouvées (10 max) sur $serverName :"
-        echo "$databases" | jq '.'
+        # Récupérer uniquement les 10 premières bases de données du serveur
+        databases=$(az sql db list --server "$serverName" --resource-group "$resourceGroup" --output json | jq '.[0:10]')
 
         # Vérifier si des bases existent
         if [[ "$databases" == "[]" || -z "$databases" ]]; then
@@ -44,7 +40,7 @@ while read -r subscription; do
 
         # Vérifier chaque base de données (limitées aux 10 premières)
         echo "$databases" | jq -c '.[]' | while read db; do
-            dbName=$(echo "$db" | jq -r '.name')
+            dbName=$(echo "$db" | jq -r '.name | gsub(" "; "")')  # Supprime les espaces autour du nom
             sku=$(echo "$db" | jq -r '.sku.tier // "UNKNOWN"')
             maxSize=$(echo "$db" | jq -r '.maxSizeBytes // 0')
             allocatedSize=$(echo "$db" | jq -r '.status.storageUsedInBytes // 0')
@@ -55,12 +51,20 @@ while read -r subscription; do
                 continue
             fi
 
+            if [[ "$allocatedSize" -eq 0 ]]; then
+                echo "  ⚠️ Attention : allocatedSizeBytes introuvable pour $dbName."
+            fi
+
             # Conversion en Go
             maxSizeGB=$((maxSize / 1024 / 1024 / 1024))
             allocatedSizeGB=$((allocatedSize / 1024 / 1024 / 1024))
 
             # Calcul du pourcentage d'utilisation du plan
-            usagePercentage=$(( (allocatedSize * 100) / maxSize ))
+            if [[ "$maxSize" -gt 0 ]]; then
+                usagePercentage=$(( (allocatedSize * 100) / maxSize ))
+            else
+                usagePercentage=0
+            fi
 
             # Ajout aux fichiers de sortie
             echo "$subscription | $resourceGroup | $serverName | $dbName | $sku | $maxSizeGB Go | $allocatedSizeGB Go | $usagePercentage%" >> "$ALL_BDS_FILE"
