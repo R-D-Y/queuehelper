@@ -47,11 +47,11 @@ while read -r subscription; do
             # Obtenir les usages de la BD (taille utilisée et allouée)
             dbUsages=$(az sql db list-usages --server "$serverName" --resource-group "$resourceGroup" --name "$dbName" --output json)
 
-            # Extraire `usedSize` (espace réellement utilisé)
-            usedSize=$(echo "$dbUsages" | jq -r '.[] | select(.displayName == "Database Size") | .currentValue // 0')
+            # Extraire `usedSize` (espace réellement utilisé) et le convertir en entier
+            usedSize=$(echo "$dbUsages" | jq -r '.[] | select(.displayName == "Database Size") | .currentValue // 0' | awk '{print int($1)}')
 
-            # Extraire `allocatedSize` (espace alloué)
-            allocatedSize=$(echo "$dbUsages" | jq -r '.[] | select(.name == "database_allocated_size") | .currentValue // 0')
+            # Extraire `allocatedSize` (espace alloué) et le convertir en entier
+            allocatedSize=$(echo "$dbUsages" | jq -r '.[] | select(.name == "database_allocated_size") | .currentValue // 0' | awk '{print int($1)}')
 
             # Vérification des valeurs
             if [[ "$maxSize" -eq 0 ]]; then
