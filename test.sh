@@ -16,31 +16,48 @@ echo "Abonnement | Groupe de Ressources | Serveur | BD | Plan | Taille Plan (Go)
 
 # Lire chaque abonnement depuis sub.txt
 while read -r subscription; do
-    echo "Traitement de l'abonnement: $subscription"
+    echo "🔄 Traitement de l'abonnement: $subscription"
     az account set --subscription "$subscription"
 
     # Récupérer la liste des serveurs SQL et leurs groupes de ressources
     servers=$(az sql server list --query "[].{name:name, resourceGroup:resourceGroup}" --output json)
+
+    # Vérifier si des serveurs existent
+    if [[ "$servers" == "[]" || -z "$servers" ]]; then
+        echo "⚠️ Aucun serveur SQL trouvé pour l'abonnement $subscription."
+        continue
+    fi
 
     # Vérifier chaque serveur SQL
     echo "$servers" | jq -c '.[]' | while read server; do
         serverName=$(echo "$server" | jq -r '.name')
         resourceGroup=$(echo "$server" | jq -r '.resourceGroup')
 
-        echo "  -> Traitement du serveur: $serverName (Groupe de ressources: $resourceGroup)"
+        echo "  📌 Traitement du serveur: $serverName (Groupe de ressources: $resourceGroup)"
 
         # Récupérer toutes les bases de données du serveur
-        databases=$(az sql db list --server "$serverName" --resource-group "$resourceGroup" --query "[].{name:name, sku:sku.tier, maxSize:maxSizeBytes, allocatedSize:status.storageUsedInBytes}" --output json)
+        databases=$(az sql db list --server "$serverName" --resource-group "$resourceGroup" --output json)
+
+        # Debug: afficher les bases brutes
+        echo "    📄 Bases trouvées sur $serverName :"
+        echo "$databases" | jq '.'
+
+        # Vérifier si des bases existent
+        if [[ "$databases" == "[]" || -z "$databases" ]]; then
+            echo "  ⚠️ Aucun base de données trouvée pour le serveur $serverName."
+            continue
+        fi
 
         # Vérifier chaque base de données
         echo "$databases" | jq -c '.[]' | while read db; do
             dbName=$(echo "$db" | jq -r '.name')
-            sku=$(echo "$db" | jq -r '.sku')
-            maxSize=$(echo "$db" | jq -r '.maxSize')
-            allocatedSize=$(echo "$db" | jq -r '.allocatedSize')
+            sku=$(echo "$db" | jq -r '.sku.tier // "UNKNOWN"')
+            maxSize=$(echo "$db" | jq -r '.maxSizeBytes // 0')
+            allocatedSize=$(echo "$db" | jq -r '.status.storageUsedInBytes // 0')
 
-            # Vérification si les valeurs existent
-            if [[ "$maxSize" == "null" || "$allocatedSize" == "null" || "$maxSize" -eq 0 ]]; then
+            # Vérification des valeurs
+            if [[ "$maxSize" -eq 0 ]]; then
+                echo "  ❌ Problème : maxSizeBytes introuvable pour $dbName."
                 continue
             fi
 
@@ -51,18 +68,20 @@ while read -r subscription; do
             # Calcul du pourcentage d'utilisation du plan
             usagePercentage=$(( (allocatedSize * 100) / maxSize ))
 
-            # Écriture dans le fichier de toutes les BD
+            # Ajout aux fichiers de sortie
             echo "$subscription | $resourceGroup | $serverName | $dbName | $sku | $maxSizeGB Go | $allocatedSizeGB Go | $usagePercentage%" >> "$ALL_BDS_FILE"
+            echo "    ✅ Ajouté : $dbName - $sku - $usagePercentage%"
 
             # Vérifier si la BD dépasse son plan
             if [[ $allocatedSize -gt $maxSize ]]; then
                 excessPercentage=$(( (allocatedSize * 100) / maxSize - 100 ))
                 echo "$subscription | $resourceGroup | $serverName | $dbName | $sku | $maxSizeGB Go | $allocatedSizeGB Go | $usagePercentage% | $excessPercentage%" >> "$ALLOCATED_TROP_FILE"
+                echo "    ⚠️ Dépassement : $dbName - $sku - Excès: $excessPercentage%"
             fi
         done
     done
 done < sub.txt
 
-echo "Script terminé. Résultats enregistrés dans :"
+echo "🎯 Script terminé. Résultats enregistrés dans :"
 echo "- $ALL_BDS_FILE (toutes les bases de données)"
 echo "- $ALLOCATED_TROP_FILE (bases dépassant leur plan)"
