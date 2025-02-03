@@ -18,33 +18,43 @@ while read -r subscription; do
     echo "Traitement de l'abonnement: $subscription"
     az account set --subscription "$subscription"
 
-    # Récupérer toutes les bases de données SQL de l'abonnement
-    databases=$(az sql db list --query "[].{name:name, server:fullyQualifiedDomainName, maxSize:maxSizeBytes, allocatedSize:status.storageUsedInBytes}" --output json)
+    # Récupérer la liste des serveurs SQL et leurs groupes de ressources
+    servers=$(az sql server list --query "[].{name:name, resourceGroup:resourceGroup}" --output json)
 
-    # Vérifier chaque base de données
-    echo "$databases" | jq -c '.[]' | while read db; do
-        name=$(echo "$db" | jq -r '.name')
-        server=$(echo "$db" | jq -r '.server')
-        maxSize=$(echo "$db" | jq -r '.maxSize')
-        allocatedSize=$(echo "$db" | jq -r '.allocatedSize')
+    # Vérifier chaque serveur SQL
+    echo "$servers" | jq -c '.[]' | while read server; do
+        serverName=$(echo "$server" | jq -r '.name')
+        resourceGroup=$(echo "$server" | jq -r '.resourceGroup')
 
-        # Vérification si les valeurs existent
-        if [[ "$maxSize" == "null" || "$allocatedSize" == "null" ]]; then
-            continue
-        fi
+        echo "  -> Traitement du serveur: $serverName (Groupe de ressources: $resourceGroup)"
 
-        # Calcul du pourcentage d'utilisation
-        usagePercentage=$(( (allocatedSize * 100) / maxSize ))
+        # Récupérer toutes les bases de données du serveur
+        databases=$(az sql db list --server "$serverName" --resource-group "$resourceGroup" --query "[].{name:name, maxSize:maxSizeBytes, allocatedSize:status.storageUsedInBytes}" --output json)
 
-        # Vérifier si la BD est proche de la limite
-        if [[ $usagePercentage -ge $THRESHOLD ]]; then
-            echo "$subscription | $server | $name | Utilisation: $usagePercentage% | Plan: $(($maxSize / 1024 / 1024 / 1024)) Go | Utilisé: $(($allocatedSize / 1024 / 1024 / 1024)) Go" >> "$PLAN_LIMITE_FILE"
-        fi
+        # Vérifier chaque base de données
+        echo "$databases" | jq -c '.[]' | while read db; do
+            dbName=$(echo "$db" | jq -r '.name')
+            maxSize=$(echo "$db" | jq -r '.maxSize')
+            allocatedSize=$(echo "$db" | jq -r '.allocatedSize')
 
-        # Vérifier si la BD dépasse son plan
-        if [[ $allocatedSize -gt $maxSize ]]; then
-            echo "$subscription | $server | $name | Plan: $(($maxSize / 1024 / 1024 / 1024)) Go | Utilisé: $(($allocatedSize / 1024 / 1024 / 1024)) Go" >> "$ALLOCATED_TROP_FILE"
-        fi
+            # Vérification si les valeurs existent
+            if [[ "$maxSize" == "null" || "$allocatedSize" == "null" ]]; then
+                continue
+            fi
+
+            # Calcul du pourcentage d'utilisation
+            usagePercentage=$(( (allocatedSize * 100) / maxSize ))
+
+            # Vérifier si la BD est proche de la limite
+            if [[ $usagePercentage -ge $THRESHOLD ]]; then
+                echo "$subscription | $resourceGroup | $serverName | $dbName | Utilisation: $usagePercentage% | Plan: $(($maxSize / 1024 / 1024 / 1024)) Go | Utilisé: $(($allocatedSize / 1024 / 1024 / 1024)) Go" >> "$PLAN_LIMITE_FILE"
+            fi
+
+            # Vérifier si la BD dépasse son plan
+            if [[ $allocatedSize -gt $maxSize ]]; then
+                echo "$subscription | $resourceGroup | $serverName | $dbName | Plan: $(($maxSize / 1024 / 1024 / 1024)) Go | Utilisé: $(($allocatedSize / 1024 / 1024 / 1024)) Go" >> "$ALLOCATED_TROP_FILE"
+            fi
+        done
     done
 done < sub.txt
 
