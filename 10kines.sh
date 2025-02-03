@@ -11,8 +11,8 @@ ALLOCATED_TROP_FILE="alocated-trop-grand.txt"
 echo "Début du script de vérification des bases de données..."
 
 # En-têtes des fichiers de sortie
-echo "Abonnement | Groupe de Ressources | Serveur | BD | Plan | Taille Plan (Go) | Utilisé (Go) | % Utilisation" > "$ALL_BDS_FILE"
-echo "Abonnement | Groupe de Ressources | Serveur | BD | Plan | Taille Plan (Go) | Utilisé (Go) | % Utilisation | % Excès" > "$ALLOCATED_TROP_FILE"
+echo "Abonnement | Groupe de Ressources | Serveur | BD | Plan | Taille Plan (Go) | Utilisé (Go) | Alloué (Go) | % Utilisation" > "$ALL_BDS_FILE"
+echo "Abonnement | Groupe de Ressources | Serveur | BD | Plan | Taille Plan (Go) | Utilisé (Go) | Alloué (Go) | % Utilisation | % Excès" > "$ALLOCATED_TROP_FILE"
 
 # Lire chaque abonnement depuis sub.txt
 while read -r subscription; do
@@ -40,10 +40,18 @@ while read -r subscription; do
 
         # Vérifier chaque base de données (limitées aux 10 premières)
         echo "$databases" | jq -c '.[]' | while read db; do
-            dbName=$(echo "$db" | jq -r '.name | gsub(" "; "")')  # Supprime les espaces autour du nom
+            dbName=$(echo "$db" | jq -r '.name | gsub(" "; "")')
             sku=$(echo "$db" | jq -r '.sku.tier // "UNKNOWN"')
             maxSize=$(echo "$db" | jq -r '.maxSizeBytes // 0')
-            allocatedSize=$(echo "$db" | jq -r '.status.storageUsedInBytes // 0')
+
+            # Obtenir les usages de la BD (taille utilisée et allouée)
+            dbUsages=$(az sql db list-usages --server "$serverName" --resource-group "$resourceGroup" --name "$dbName" --output json)
+
+            # Extraire `usedSize` (espace réellement utilisé)
+            usedSize=$(echo "$dbUsages" | jq -r '.[] | select(.displayName == "Database Size") | .currentValue // 0')
+
+            # Extraire `allocatedSize` (espace alloué)
+            allocatedSize=$(echo "$dbUsages" | jq -r '.[] | select(.name == "database_allocated_size") | .currentValue // 0')
 
             # Vérification des valeurs
             if [[ "$maxSize" -eq 0 ]]; then
@@ -51,29 +59,34 @@ while read -r subscription; do
                 continue
             fi
 
+            if [[ "$usedSize" -eq 0 ]]; then
+                echo "  ⚠️ Attention : usedSize introuvable pour $dbName."
+            fi
+
             if [[ "$allocatedSize" -eq 0 ]]; then
-                echo "  ⚠️ Attention : allocatedSizeBytes introuvable pour $dbName."
+                echo "  ⚠️ Attention : allocatedSize introuvable pour $dbName."
             fi
 
             # Conversion en Go
             maxSizeGB=$((maxSize / 1024 / 1024 / 1024))
+            usedSizeGB=$((usedSize / 1024 / 1024 / 1024))
             allocatedSizeGB=$((allocatedSize / 1024 / 1024 / 1024))
 
             # Calcul du pourcentage d'utilisation du plan
             if [[ "$maxSize" -gt 0 ]]; then
-                usagePercentage=$(( (allocatedSize * 100) / maxSize ))
+                usagePercentage=$(( (usedSize * 100) / maxSize ))
             else
                 usagePercentage=0
             fi
 
             # Ajout aux fichiers de sortie
-            echo "$subscription | $resourceGroup | $serverName | $dbName | $sku | $maxSizeGB Go | $allocatedSizeGB Go | $usagePercentage%" >> "$ALL_BDS_FILE"
-            echo "    ✅ Ajouté : $dbName - $sku - $usagePercentage%"
+            echo "$subscription | $resourceGroup | $serverName | $dbName | $sku | $maxSizeGB Go | $usedSizeGB Go | $allocatedSizeGB Go | $usagePercentage%" >> "$ALL_BDS_FILE"
+            echo "    ✅ Ajouté : $dbName - $sku - Utilisé: $usedSizeGB Go - Alloué: $allocatedSizeGB Go - $usagePercentage%"
 
             # Vérifier si la BD dépasse son plan
             if [[ $allocatedSize -gt $maxSize ]]; then
                 excessPercentage=$(( (allocatedSize * 100) / maxSize - 100 ))
-                echo "$subscription | $resourceGroup | $serverName | $dbName | $sku | $maxSizeGB Go | $allocatedSizeGB Go | $usagePercentage% | $excessPercentage%" >> "$ALLOCATED_TROP_FILE"
+                echo "$subscription | $resourceGroup | $serverName | $dbName | $sku | $maxSizeGB Go | $usedSizeGB Go | $allocatedSizeGB Go | $usagePercentage% | $excessPercentage%" >> "$ALLOCATED_TROP_FILE"
                 echo "    ⚠️ Dépassement : $dbName - $sku - Excès: $excessPercentage%"
             fi
         done
