@@ -1,0 +1,101 @@
+#!/bin/bash
+
+# Fichiers de sortie
+ALL_BDS_FILE="toutes-les-bds.txt"
+ALLOCATED_TROP_FILE="alocated-trop-grand.txt"
+
+# Nettoyage des fichiers avant d'ajouter du contenu
+> "$ALL_BDS_FILE"
+> "$ALLOCATED_TROP_FILE"
+
+echo "Début du script de vérification des bases de données..."
+
+# En-têtes des fichiers de sortie
+echo "Abonnement | Groupe de Ressources | Serveur | BD | Plan | Taille Plan (Go) | Utilisé (Go) | Alloué (Go) | Restant (Go) | % Utilisation | % Alloué" > "$ALL_BDS_FILE"
+echo "Abonnement | Groupe de Ressources | Serveur | BD | Plan | Taille Plan (Go) | Utilisé (Go) | Alloué (Go) | Restant (Go) | % Utilisation | % Alloué | % Excès" > "$ALLOCATED_TROP_FILE"
+
+# Lire chaque abonnement depuis sub.txt
+while read -r subscription; do
+    echo "🔄 Traitement de l'abonnement: $subscription"
+    az account set --subscription "$subscription"
+
+    # Récupérer la liste des serveurs SQL et leurs groupes de ressources
+    servers=$(az sql server list --query "[].{name:name, resourceGroup:resourceGroup}" --output json)
+
+    # Vérifier chaque serveur SQL
+    echo "$servers" | jq -c '.[]' | while read server; do
+        serverName=$(echo "$server" | jq -r '.name')
+        resourceGroup=$(echo "$server" | jq -r '.resourceGroup')
+
+        echo "  📌 Traitement du serveur: $serverName (Groupe de ressources: $resourceGroup)"
+
+        # Récupérer uniquement les 10 premières bases de données du serveur
+        databases=$(az sql db list --server "$serverName" --resource-group "$resourceGroup" --output json | jq '.[0:10]')
+
+        # Vérifier si des bases existent
+        if [[ "$databases" == "[]" || -z "$databases" ]]; then
+            echo "  ⚠️ Aucun base de données trouvée pour le serveur $serverName."
+            continue
+        fi
+
+        # Vérifier chaque base de données (limitées aux 10 premières)
+        echo "$databases" | jq -c '.[]' | while read db; do
+            dbName=$(echo "$db" | jq -r '.name | gsub(" "; "")')
+            sku=$(echo "$db" | jq -r '.sku.tier // "UNKNOWN"')
+            maxSize=$(echo "$db" | jq -r '.maxSizeBytes // 0')
+
+            # Obtenir les usages de la BD (taille utilisée et allouée)
+            dbUsages=$(az sql db list-usages --server "$serverName" --resource-group "$resourceGroup" --name "$dbName" --output json)
+
+            # Extraire `usedSize` (espace réellement utilisé) et le convertir en entier
+            usedSize=$(echo "$dbUsages" | jq -r '.[] | select(.displayName == "Database Size") | .currentValue // 0' | awk '{print int($1)}')
+
+            # Extraire `allocatedSize` (espace alloué) et le convertir en entier
+            allocatedSize=$(echo "$dbUsages" | jq -r '.[] | select(.name == "database_allocated_size") | .currentValue // 0' | awk '{print int($1)}')
+
+            # Vérification des valeurs
+            if [[ "$maxSize" -eq 0 ]]; then
+                echo "  ❌ Problème : maxSizeBytes introuvable pour $dbName."
+                continue
+            fi
+
+            if [[ "$usedSize" -eq 0 ]]; then
+                echo "  ⚠️ Attention : usedSize introuvable pour $dbName."
+            fi
+
+            if [[ "$allocatedSize" -eq 0 ]]; then
+                echo "  ⚠️ Attention : allocatedSize introuvable pour $dbName."
+            fi
+
+            # Conversion en Go
+            maxSizeGB=$((maxSize / 1024 / 1024 / 1024))
+            usedSizeGB=$((usedSize / 1024 / 1024 / 1024))
+            allocatedSizeGB=$((allocatedSize / 1024 / 1024 / 1024))
+            remainingSizeGB=$((maxSizeGB - usedSizeGB))
+
+            # Calcul des pourcentages
+            if [[ "$maxSize" -gt 0 ]]; then
+                usagePercentage=$(( (usedSize * 100) / maxSize ))
+                allocatedPercentage=$(( (allocatedSize * 100) / maxSize ))
+            else
+                usagePercentage=0
+                allocatedPercentage=0
+            fi
+
+            # Ajout aux fichiers de sortie
+            echo "$subscription | $resourceGroup | $serverName | $dbName | $sku | $maxSizeGB Go | $usedSizeGB Go | $allocatedSizeGB Go | $remainingSizeGB Go | $usagePercentage% | $allocatedPercentage%" >> "$ALL_BDS_FILE"
+            echo "    ✅ Ajouté : $dbName - $sku - Utilisé: $usedSizeGB Go - Alloué: $allocatedSizeGB Go - Restant: $remainingSizeGB Go - % Utilisation: $usagePercentage% - % Alloué: $allocatedPercentage%"
+
+            # Vérifier si la BD dépasse son plan
+            if [[ $allocatedSize -gt $maxSize ]]; then
+                excessPercentage=$(( (allocatedSize * 100) / maxSize - 100 ))
+                echo "$subscription | $resourceGroup | $serverName | $dbName | $sku | $maxSizeGB Go | $usedSizeGB Go | $allocatedSizeGB Go | $remainingSizeGB Go | $usagePercentage% | $allocatedPercentage% | $excessPercentage%" >> "$ALLOCATED_TROP_FILE"
+                echo "    ⚠️ Dépassement : $dbName - $sku - Excès: $excessPercentage%"
+            fi
+        done
+    done
+done < sub.txt
+
+echo "🎯 Script terminé. Résultats enregistrés dans :"
+echo "- $ALL_BDS_FILE (toutes les bases de données)"
+echo "- $ALLOCATED_TROP_FILE (bases dépassant leur plan)"
